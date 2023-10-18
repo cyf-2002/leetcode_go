@@ -4,43 +4,46 @@ import (
 	"fmt"
 )
 
-func generateMatrix(n int) [][]int {
-	matrix := make([][]int, n) // 创建一个包含n个切片的切片
-	for i := 0; i < n; i++ {
-		matrix[i] = make([]int, n) // 每个切片都创建一个包含n个元素的切片
-	}
+func spiralOrder(matrix [][]int) []int {
+	rows := len(matrix)
+	cols := len(matrix[0])
+	order := make([]int, rows*cols)
+	
+	index := 0
+	left, right, top, bottom := 0, cols-1, 0, rows-1
 
-	offset := 0    //从offset开始每一圈的赋值
-	loop := n / 2 //要转n / 2圈，画一个5 * 5矩阵很好理解
-	count := 1
-	for loop > 0 {
-		for j := offset; j < n-offset-1; j++ { //坚持左闭右开原则
-			matrix[offset][j] = count
-			count++
+	for left <= right && top <= bottom {
+		for column := left; column <= right; column++ {
+			order[index] = matrix[top][column]
+			index++
 		}
-		for i := offset; i < n-offset-1; i++ {
-			matrix[i][n-offset-1] = count
-			count++
+		for row := top + 1; row <= bottom; row++ {
+			order[index] = matrix[row][right]
+			index++
 		}
-		for j := n - offset - 1; j > offset; j-- {
-			matrix[n-offset-1][j] = count
-			count++
+		//[1, 2, 3]不能进行如下遍历，所以需要加一个限制条件
+		if left < right && top < bottom {
+			for column := right - 1; column > left; column-- {
+				order[index] = matrix[bottom][column]
+				index++
+			}
+			for row := bottom; row > top; row-- {
+				order[index] = matrix[row][left]
+				index++
+			}
 		}
-		for i := n - offset - 1; i > offset; i-- {
-			matrix[i][offset] = count
-			count++
-		}
-
-		offset += 1 //第二圈赋值从(1, 1)开始，依次...
-		loop -= 1
+		left++
+		right--
+		top++
+		bottom--
 	}
-
-	if n%2 == 1 {
-		matrix[offset][offset] = count
-	}
-	return matrix
+	return order
 }
 
 func main() {
-	fmt.Print("Hello")
+	matrix := [][]int{
+		{1, 2, 3},
+	}
+
+	fmt.Print(spiralOrder(matrix))
 }
