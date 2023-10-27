@@ -9,16 +9,21 @@ type ListNode struct {
 	Next *ListNode
 }
 
-func reverseList(head *ListNode) *ListNode {
-	var prev *ListNode
-
-	for head != nil {
-		temp := head.Next
-		head.Next = prev
-		prev = head
-		head = temp
+func removeNthFromEnd(head *ListNode, n int) *ListNode {
+	dummyhead := &ListNode{
+		Next: head,
 	}
-	return prev
+	slow, fast := dummyhead, dummyhead
+	for n > 0 {
+		fast = fast.Next
+		n -= 1
+	}
+	for fast.Next != nil {
+		slow = slow.Next
+		fast = fast.Next
+	}
+	slow.Next = slow.Next.Next
+	return dummyhead.Next
 }
 
 func main() {
