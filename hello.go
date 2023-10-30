@@ -4,26 +4,21 @@ import (
 	"fmt"
 )
 
-type ListNode struct {
-	Val  int
-	Next *ListNode
-}
-
-func detectCycle(head *ListNode) *ListNode {
-	slow, fast := head, head
-	for fast != nil && fast.Next != nil {
-		slow = slow.Next
-		fast = fast.Next.Next
-		if slow == fast {
-			slow = head
-			for slow != fast {
-				slow = slow.Next
-				fast = fast.Next
-			}
-			return slow
+func intersection(nums1 []int, nums2 []int) []int {
+	set := make(map[int]struct{}, 0)
+	res := make([]int, 0)
+	for _, num1 := range nums1 {
+		if _, ok := set[num1]; !ok {
+			set[num1] = struct{}{}
 		}
 	}
-	return nil
+	for _, num2 := range nums2 {
+		if _, ok := set[num2]; ok {
+			res = append(res, num2)
+			delete(set, num2)
+		}
+	}
+	return res
 }
 
 func main() {
