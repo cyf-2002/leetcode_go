@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strconv"
 )
 
 // Definition for a binary tree node.
@@ -11,30 +12,27 @@ type TreeNode struct {
 	Right *TreeNode
 }
 
-func invertTree(root *TreeNode) *TreeNode {
+var res []string
+
+func dfs(root *TreeNode, path string) {
 	if root == nil {
-		return root
+		return
 	}
-
-	queue := []*TreeNode{root}
-	for len(queue) > 0 {
-		levelSize := len(queue)
-		for i := 0; i < levelSize; i++ {
-			if queue[i].Left != nil || queue[i].Right != nil {
-				queue[i].Left, queue[i].Right = queue[i].Right, queue[i].Left
-			}
-			if queue[i].Left != nil {
-				queue = append(queue, queue[i].Left)
-			}
-			if queue[i].Right != nil {
-				queue = append(queue, queue[i].Right)
-			}
-		}
-
-		queue = queue[levelSize:]
+	if root.Left == nil && root.Right == nil {
+		res = append(res, path+strconv.Itoa(root.Val))
 	}
+	if root.Left != nil {
+		dfs(root.Left, path+strconv.Itoa(root.Val)+"->")
+	}
+	if root.Right != nil {
+		dfs(root.Right, path+strconv.Itoa(root.Val)+"->")
+	}
+}
 
-	return root
+func binaryTreePaths(root *TreeNode) []string {
+	res = []string{}
+	dfs(root, "")
+	return res
 }
 
 func main() {
