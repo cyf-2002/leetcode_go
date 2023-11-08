@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"strconv"
 )
 
 // Definition for a binary tree node.
@@ -12,26 +11,29 @@ type TreeNode struct {
 	Right *TreeNode
 }
 
-var res []string
+var res [][]int
 
-func dfs(root *TreeNode, path string) {
+func findPath(root *TreeNode, targetSum int, path []int) {
 	if root == nil {
 		return
 	}
-	if root.Left == nil && root.Right == nil {
-		res = append(res, path+strconv.Itoa(root.Val))
-	}
-	if root.Left != nil {
-		dfs(root.Left, path+strconv.Itoa(root.Val)+"->")
-	}
-	if root.Right != nil {
-		dfs(root.Right, path+strconv.Itoa(root.Val)+"->")
+
+	path = append(path, root.Val)
+	targetSum -= root.Val
+	if root.Left == nil && root.Right == nil && targetSum == 0 {
+		cp := make([]int, len(path))
+		copy(cp, path)
+		res = append(res, cp)
+	} else {
+		findPath(root.Left, targetSum, path)
+		findPath(root.Right, targetSum, path)
 	}
 }
 
-func binaryTreePaths(root *TreeNode) []string {
-	res = []string{}
-	dfs(root, "")
+func pathSum(root *TreeNode, targetSum int) [][]int {
+	res = [][]int{}
+	var path []int
+	findPath(root, targetSum, path)
 	return res
 }
 
