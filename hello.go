@@ -11,32 +11,31 @@ type TreeNode struct {
 	Right *TreeNode
 }
 
-var res [][]int
+func isValidBST(root *TreeNode) bool {
+    nums := make([]int, 0)
 
-func findPath(root *TreeNode, targetSum int, path []int) {
-	if root == nil {
-		return
-	}
+    var traversal func(root *TreeNode)
+    traversal = func(root *TreeNode) {
+        if root == nil {
+            return
+        }
+        traversal(root.Left)
+        nums = append(nums, root.Val)
+        traversal(root.Right)
+    }
 
-	path = append(path, root.Val)
-	targetSum -= root.Val
-	if root.Left == nil && root.Right == nil && targetSum == 0 {
-		cp := make([]int, len(path))
-		copy(cp, path)
-		res = append(res, cp)
-	} else {
-		findPath(root.Left, targetSum, path)
-		findPath(root.Right, targetSum, path)
-	}
+    traversal(root)
+
+    for i := 1; i < len(nums); i++ {
+        if nums[i] <= nums[i-1] {
+            return false
+        }
+    }
+
+    return true
 }
 
-func pathSum(root *TreeNode, targetSum int) [][]int {
-	res = [][]int{}
-	var path []int
-	findPath(root, targetSum, path)
-	return res
-}
 
 func main() {
-	fmt.Print("hi")
+	fmt.Print("hello")
 }
