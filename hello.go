@@ -2,38 +2,39 @@ package main
 
 import (
 	"fmt"
+	"sort"
 )
 
-func combinationSum3(n int, k int) [][]int {
-	path := make([]int, 0, k)
+func combinationSum2(candidates []int, target int) [][]int {
+	sort.Ints(candidates)
+	path := make([]int, 0)
 	res := make([][]int, 0)
 
-	var backtracking func(n, k, start int)
-	backtracking = func(n, k, start int) {
-		if n == 0 && k == 0 {
-			tmp := append([]int{}, path...)		//拷贝
+	var backtracking func(target int, start int)
+	backtracking = func(target int, start int) {
+		if target == 0 {
+			tmp := append([]int{}, path...)
 			res = append(res, tmp)
 			return
 		}
 
-		for i := start; i <= 9; i++ {
-			if i > n {
+		for i := start; i < len(candidates); i++ {
+			if candidates[i] > target {
 				break
 			}
-			if 9-i+1 < k-len(path) {	//剪枝
-				break
+			if i > start && candidates[i] == candidates[i-1] {
+				continue
 			}
-			path = append(path, i)
-			backtracking(n-i, k-1, i+1)
-			path = path[:len(path)-1]	//回溯
+			path = append(path, candidates[i])
+			backtracking(target-candidates[i], i+1)
+			path = path[:len(path)-1]
 		}
 	}
 
-	backtracking(n, k, 1)
+	backtracking(target, 0)
 	return res
 }
 
 func main() {
-	res := combinationSum3(1, 4)
-	fmt.Print(res)
+	fmt.Print("hi")
 }
