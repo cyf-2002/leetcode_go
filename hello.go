@@ -2,39 +2,46 @@ package main
 
 import (
 	"fmt"
-	"sort"
+	"strconv"
+	"strings"
 )
 
-func combinationSum2(candidates []int, target int) [][]int {
-	sort.Ints(candidates)
-	path := make([]int, 0)
-	res := make([][]int, 0)
+func restoreIpAddresses(s string) []string {
+	path := make([]string, 0, 4)
+	res := make([]string, 0)
 
-	var backtracking func(target int, start int)
-	backtracking = func(target int, start int) {
-		if target == 0 {
-			tmp := append([]int{}, path...)
-			res = append(res, tmp)
+	var backtracking func(s string, start int)
+	backtracking = func(s string, start int) {
+		if len(path) == 4 {
+			if start == len(s) {
+				tmp := strings.Join(path, ".")
+				res = append(res, tmp)
+			}
 			return
 		}
 
-		for i := start; i < len(candidates); i++ {
-			if candidates[i] > target {
+		for i := start; i < len(s); i++ {
+			if i != start && s[start] == '0' {
 				break
 			}
-			if i > start && candidates[i] == candidates[i-1] {
-				continue
+			str := s[start : i+1]
+			num, _ := strconv.Atoi(str)
+			if num >= 0 && num <= 255 {
+				path = append(path, str)
+				backtracking(s, i+1)
+				path = path[:len(path)-1]
+			} else {
+				break
 			}
-			path = append(path, candidates[i])
-			backtracking(target-candidates[i], i+1)
-			path = path[:len(path)-1]
 		}
 	}
 
-	backtracking(target, 0)
+	backtracking(s, 0)
 	return res
 }
 
 func main() {
+	res := restoreIpAddresses("25525511135")
+	fmt.Print(res)
 	fmt.Print("hi")
 }
