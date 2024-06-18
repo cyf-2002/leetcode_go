@@ -2,48 +2,41 @@ package main
 
 import (
 	"fmt"
-	"math/rand"
-	"time"
 )
 
 func main() {
-
-	fmt.Println(rand.Intn(10))
-	fmt.Println(rand.Intn(10))
-	fmt.Println(rand.Intn(10))
-	fmt.Println(rand.Intn(10))
+	c := findKthLargest([]int{1, 3, 4, 2, 6, 5}, 2)
+	fmt.Println(c)
 
 }
 
-func sortArray(nums []int) []int {
-	quickSort(nums, 0, len(nums)-1)
-	return nums
+func findKthLargest(nums []int, k int) int {
+	heapSize := len(nums)
+	buildMaxHeap(nums, heapSize)
+	for i := len(nums) - 1; i >= len(nums)-k+1; i-- {
+		nums[0], nums[i] = nums[i], nums[0]
+		heapSize--
+		maxHeapify(nums, 0, heapSize)
+	}
+	return nums[0]
 }
 
-func quickSort(nums []int, l, r int) {
-	if l < r {
-		pivot := partition(nums, l, r)
-		quickSort(nums, l, pivot-1)
-		quickSort(nums, pivot+1, r)
+func buildMaxHeap(a []int, heapSize int) {
+	for i := heapSize / 2; i >= 0; i-- {
+		maxHeapify(a, i, heapSize)
 	}
 }
 
-func partition(nums []int, l, r int) int {
-	newRand := rand.New(rand.NewSource(time.Now().UnixNano()))
-	// 将pivot移到最右
-	keyIndex := l + newRand.Intn(r-l+1)
-	key := nums[keyIndex]
-	nums[keyIndex], nums[r] = nums[r], nums[keyIndex]
-	// [l, i) < key [i, r] >= key
-	i, j := l, l
-	for j < r {
-		if nums[j] < key {
-			nums[i], nums[j] = nums[j], nums[i]
-			i++
-		}
-		j++
+func maxHeapify(a []int, i, heapSize int) {
+	l, r, largest := i*2+1, i*2+2, i
+	if l < heapSize && a[l] > a[largest] {
+		largest = l
 	}
-	// 将pivot放到i处
-	nums[i], nums[r] = nums[r], nums[i]
-	return i
+	if r < heapSize && a[r] > a[largest] {
+		largest = r
+	}
+	if largest != i {
+		a[i], a[largest] = a[largest], a[i]
+		maxHeapify(a, largest, heapSize)
+	}
 }
