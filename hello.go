@@ -1,15 +1,15 @@
 package main
 
-import (
-	"fmt"
-)
+type Person struct {
+	Name string
+	Age  int
+}
 
 func main() {
-	var a, b int
-	_, err := fmt.Scan(&a, &b)
-	if err != nil {
-		return
+	p := Person{
+		Age:  0,
+		Name: "World",
 	}
-	fmt.Println(a, b)
 
+	p.Name = "Hello"
 }
