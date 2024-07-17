@@ -1,46 +1,52 @@
 package main
 
-import "fmt"
+import (
+	"container/heap"
+	"fmt"
+	"sort"
+)
 
-type Pair struct {
-	multi int
-	res   string
+// 继承sort.Interface的方法
+type IntHeap struct {
+	sort.IntSlice
 }
 
-func decodeString(s string) string {
-	st := make([]Pair, 0)
-	res := ""
-	multi := 0
-	for _, str := range s {
-		if str >= 'a' && str <= 'z' {
-			res += string(str)
-		} else if str >= '0' && str <= '9' {
-			// str-'0' 是 int32 型
-			multi = 10*multi + int(str-'0')
-		} else if str == '[' {
-			st = append(st, Pair{multi, res})
-			multi, res = 0, ""
-		} else {
-			// str ==']'
-			last := st[len(st)-1]
-			st = st[:len(st)-1]
-			res = last.res + repeatString(res, last.multi)
+// 因为最大堆，所以覆盖Less方法，返回较大值
+func (h IntHeap) Less(i, j int) bool {
+	return h.IntSlice[i] > h.IntSlice[j]
+}
+
+func (h *IntHeap) Push(x interface{}) {
+	h.IntSlice = append(h.IntSlice, x.(int))
+}
+
+func (h *IntHeap) Pop() interface{} {
+	x := h.IntSlice[len(h.IntSlice)-1]
+	h.IntSlice = h.IntSlice[:len(h.IntSlice)-1]
+	return x
+}
+
+// 最小k个数
+func getLeastNumbers(arr []int, k int) []int {
+	if k == 0 {
+		return []int{}
+	}
+	heapArr := make([]int, k)
+	copy(heapArr, arr[:k])
+	// 重要，取指针
+	h := &IntHeap{IntSlice: heapArr}
+	heap.Init(h)
+	for i := k; i < len(arr); i++ {
+		if x := arr[i]; x < h.IntSlice[0] {
+			heap.Pop(h)
+			heap.Push(h, x)
 		}
 	}
+	return h.IntSlice
 
-	return res
 }
 
-func repeatString(s string, multi int) string {
-	res := ""
-	for i := 0; i < multi; i++ {
-		res += s
-	}
-	return res
-}
 func main() {
-	res := decodeString("3[a]2[bc]")
-	fmt.Println(res)
-	a := '9' - '0'
+	a := getLeastNumbers([]int{1, 2, 3, 4, 5}, 3)
 	fmt.Println(a)
 }
