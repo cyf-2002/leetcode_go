@@ -6,6 +6,15 @@ import (
 	"sort"
 )
 
+type MedianFinder struct {
+	minHp *hpMin
+	maxHp *hpMax
+}
+
+func Constructor() MedianFinder {
+	return MedianFinder{maxHp: }
+}
+
 // 继承sort.Interface的方法
 type IntHeap struct {
 	sort.IntSlice
