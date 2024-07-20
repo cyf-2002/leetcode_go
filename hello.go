@@ -1,61 +1,22 @@
 package main
 
-import (
-	"container/heap"
-	"fmt"
-	"sort"
-)
+import "fmt"
 
-type MedianFinder struct {
-	minHp *hpMin
-	maxHp *hpMax
-}
-
-func Constructor() MedianFinder {
-	return MedianFinder{maxHp: }
-}
-
-// 继承sort.Interface的方法
-type IntHeap struct {
-	sort.IntSlice
-}
-
-// 因为最大堆，所以覆盖Less方法，返回较大值
-func (h IntHeap) Less(i, j int) bool {
-	return h.IntSlice[i] > h.IntSlice[j]
-}
-
-func (h *IntHeap) Push(x interface{}) {
-	h.IntSlice = append(h.IntSlice, x.(int))
-}
-
-func (h *IntHeap) Pop() interface{} {
-	x := h.IntSlice[len(h.IntSlice)-1]
-	h.IntSlice = h.IntSlice[:len(h.IntSlice)-1]
-	return x
-}
-
-// 最小k个数
-func getLeastNumbers(arr []int, k int) []int {
-	if k == 0 {
-		return []int{}
-	}
-	heapArr := make([]int, k)
-	copy(heapArr, arr[:k])
-	// 重要，取指针
-	h := &IntHeap{IntSlice: heapArr}
-	heap.Init(h)
-	for i := k; i < len(arr); i++ {
-		if x := arr[i]; x < h.IntSlice[0] {
-			heap.Pop(h)
-			heap.Push(h, x)
+func merge(nums1 []int, m int, nums2 []int, n int) {
+	idx := m + n - 1
+	for n > 0 {
+		if m > 0 && nums1[m-1] > nums2[n-1] {
+			nums1[idx] = nums1[m-1]
+			m--
+		} else {
+			nums1[idx] = nums2[n-1]
+			n--
 		}
+		idx--
 	}
-	return h.IntSlice
-
 }
 
 func main() {
-	a := getLeastNumbers([]int{1, 2, 3, 4, 5}, 3)
-	fmt.Println(a)
+
+	fmt.Println("hello world")
 }
