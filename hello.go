@@ -17,6 +17,7 @@ func merge(nums1 []int, m int, nums2 []int, n int) {
 }
 
 func main() {
-	fmt.Println("hello")
+	x := 2
+	fmt.Println(-x)
 	fmt.Println("hello world")
 }
