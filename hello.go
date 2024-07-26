@@ -1,23 +1,45 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"golang.org/x/crypto/bcrypt"
+)
 
-func merge(nums1 []int, m int, nums2 []int, n int) {
-	idx := m + n - 1
-	for n > 0 {
-		if m > 0 && nums1[m-1] > nums2[n-1] {
-			nums1[idx] = nums1[m-1]
-			m--
-		} else {
-			nums1[idx] = nums2[n-1]
-			n--
-		}
-		idx--
+// HashPassword hashes a plain text password using bcrypt.
+func HashPassword(password string) (string, error) {
+	// Generate hashed password with default cost.
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return "", err
 	}
+	return string(hashedPassword), nil
+}
+
+// CheckPasswordHash compares a bcrypt hashed password with its possible plaintext equivalent.
+func CheckPasswordHash(password, hashedPassword string) bool {
+	err := bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(password))
+	return err == nil
 }
 
 func main() {
-	x := 2
-	fmt.Println(-x)
-	fmt.Println("hello world")
+	password := "mySuperSecretPassword"
+
+	// Generate hashed password
+	hashedPassword, err := HashPassword(password)
+	if err != nil {
+		fmt.Println("Error hashing password:", err)
+		return
+	}
+
+	fmt.Printf("Original password: %s\n", password)
+	fmt.Printf("Hashed password: %s\n", hashedPassword)
+
+	// Validate password
+	isValid := CheckPasswordHash(password, hashedPassword)
+	fmt.Printf("Password is valid: %v\n", isValid)
+
+	// Check with a wrong password
+	wrongPassword := "wrongPassword"
+	isValid = CheckPasswordHash(wrongPassword, hashedPassword)
+	fmt.Printf("Wrong password is valid: %v\n", isValid)
 }
