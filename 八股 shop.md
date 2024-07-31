@@ -565,6 +565,94 @@ conn, err := grpc.Dial(
 
 
 
+```c
+static struct dm_table *__bind(struct mapped_device *md, struct dm_table *t,
+			       struct queue_limits *limits)
+{
+	struct dm_table *old_map;
+	struct request_queue *q = md->queue;
+	bool request_based = dm_table_request_based(t);
+	sector_t size;
+	int ret;
+
+	lockdep_assert_held(&md->suspend_lock);
+
+	size = dm_table_get_size(t);
+
+	/*
+	 * Wipe any geometry if the size of the table changed.
+	 */
+	if (size != dm_get_size(md))
+		memset(&md->geometry, 0, sizeof(md->geometry));
+
+	set_capacity(md->disk, size);
+	bd_set_nr_sectors(md->bdev, size);
+
+	dm_table_event_callback(t, event_callback, md);
+
+	/*
+	 * The queue hasn't been stopped yet, if the old table type wasn't
+	 * for request-based during suspension.  So stop it to prevent
+	 * I/O mapping before resume.
+	 * This must be done before setting the queue restrictions,
+	 * because request-based dm may be run just after the setting.
+	 */
+	if (request_based)
+		dm_stop_queue(q);
+
+	if (request_based) {
+		/*
+		 * Leverage the fact that request-based DM targets are
+		 * immutable singletons - used to optimize dm_mq_queue_rq.
+		 */
+		md->immutable_target = dm_table_get_immutable_target(t);
+	}
+
+	ret = __bind_mempools(md, t);
+	if (ret) {
+		old_map = ERR_PTR(ret);
+		goto out;
+	}
+
+	old_map = rcu_dereference_protected(md->map, lockdep_is_held(&md->suspend_lock));
+	rcu_assign_pointer(md->map, (void *)t);
+	md->immutable_target_type = dm_table_get_immutable_target_type(t);
+
+	dm_table_set_restrictions(t, q, limits);
+	if (old_map)
+		dm_sync_table(md);
+
+out:
+	return old_map;
+}
+
+static void __bind(struct thermal_zone_device *tz, int mask,
+		   struct thermal_cooling_device *cdev,
+		   unsigned long *limits,
+		   unsigned int weight)
+{
+	int i, ret;
+
+	for (i = 0; i < tz->trips; i++) {
+		if (mask & (1 << i)) {
+			unsigned long upper, lower;
+
+			upper = THERMAL_NO_LIMIT;
+			lower = THERMAL_NO_LIMIT;
+			if (limits) {
+				lower = limits[i * 2];
+				upper = limits[i * 2 + 1];
+			}
+			ret = thermal_zone_bind_cooling_device(tz, i, cdev,
+							       upper, lower,
+							       weight);
+			if (ret)
+				print_bind_err_msg(tz, cdev, ret);
+		}
+	}
+}
+```
+
 
 
 
