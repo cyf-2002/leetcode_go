@@ -520,7 +520,7 @@ func InitBaseRouter(router *gin.RouterGroup) {
 
 2. 加权轮询：权重高的服务器分配更多请求，适用于服务器性能不均衡的情况
 
-3. 源地址哈希：同一ip的请求映射到同一台服务器
+3. 源地址哈希：同一ip的请求映射到同一台服务器；服务器增减后会导致取模运算发生很大的改变。
 
    > 一致性哈希算法将 key 映射到 2^32 的空间中，将这个数字首尾相连，形成一个环。
    >
@@ -555,103 +555,77 @@ conn, err := grpc.Dial(
 
 ---
 
+## 3. nacos 分布式配置中心
 
+基于本地文件配置：修改配置文件后需要重启服务；很多服务都依赖同一个配置，全部需要改；多语言多框架
 
+1. 命名空间：可以隔离配置集，命名空间用来区分微服务
+2. 组：可以用来区分 开发、测试、生产环境
 
+根据yaml文件配置全局变量 nacosconfig  读取：
 
+```go
+nacos:
+  host: '127.0.0.1'
+  port: 8848
+  namespace_id: 'f571d8e2-908c-4446-951c-9e9b8fb36ab1'
+  user: 'nacos'
+  password: 'nacos'
+  data_id: 'user-srv.json'
+  group: 'dev'
 
-
-
-
-
-
-```c
-static struct dm_table *__bind(struct mapped_device *md, struct dm_table *t,
-			       struct queue_limits *limits)
-{
-	struct dm_table *old_map;
-	struct request_queue *q = md->queue;
-	bool request_based = dm_table_request_based(t);
-	sector_t size;
-	int ret;
-
-	lockdep_assert_held(&md->suspend_lock);
-
-	size = dm_table_get_size(t);
-
-	/*
-	 * Wipe any geometry if the size of the table changed.
-	 */
-	if (size != dm_get_size(md))
-		memset(&md->geometry, 0, sizeof(md->geometry));
-
-	set_capacity(md->disk, size);
-	bd_set_nr_sectors(md->bdev, size);
-
-	dm_table_event_callback(t, event_callback, md);
-
-	/*
-	 * The queue hasn't been stopped yet, if the old table type wasn't
-	 * for request-based during suspension.  So stop it to prevent
-	 * I/O mapping before resume.
-	 * This must be done before setting the queue restrictions,
-	 * because request-based dm may be run just after the setting.
-	 */
-	if (request_based)
-		dm_stop_queue(q);
-
-	if (request_based) {
-		/*
-		 * Leverage the fact that request-based DM targets are
-		 * immutable singletons - used to optimize dm_mq_queue_rq.
-		 */
-		md->immutable_target = dm_table_get_immutable_target(t);
+	//服务端配置
+	sc := []constant.ServerConfig{
+		{
+			IpAddr: global.NacosConfig.Host,
+			Port:   global.NacosConfig.Port,
+		},
 	}
 
-	ret = __bind_mempools(md, t);
-	if (ret) {
-		old_map = ERR_PTR(ret);
-		goto out;
+	//客户端配置
+	cc := constant.ClientConfig{
+		NamespaceId:         global.NacosConfig.NamespaceId, 
+		TimeoutMs:           5000,
+		NotLoadCacheAtStart: true,
+		LogDir:              "tmp/nacos/log",
+		CacheDir:            "tmp/nacos/cache",
+		LogLevel: "debug",
 	}
 
-	old_map = rcu_dereference_protected(md->map, lockdep_is_held(&md->suspend_lock));
-	rcu_assign_pointer(md->map, (void *)t);
-	md->immutable_target_type = dm_table_get_immutable_target_type(t);
-
-	dm_table_set_restrictions(t, q, limits);
-	if (old_map)
-		dm_sync_table(md);
-
-out:
-	return old_map;
-}
-
-static void __bind(struct thermal_zone_device *tz, int mask,
-		   struct thermal_cooling_device *cdev,
-		   unsigned long *limits,
-		   unsigned int weight)
-{
-	int i, ret;
-
-	for (i = 0; i < tz->trips; i++) {
-		if (mask & (1 << i)) {
-			unsigned long upper, lower;
-
-			upper = THERMAL_NO_LIMIT;
-			lower = THERMAL_NO_LIMIT;
-			if (limits) {
-				lower = limits[i * 2];
-				upper = limits[i * 2 + 1];
-			}
-			ret = thermal_zone_bind_cooling_device(tz, i, cdev,
-							       upper, lower,
-							       weight);
-			if (ret)
-				print_bind_err_msg(tz, cdev, ret);
-		}
+	configClient, err := clients.CreateConfigClient(map[string]interface{}{
+		"clientConfig":  cc,
+		"serverConfigs": sc,
+	})
+	if err != nil {
+		panic(err)
 	}
-}
+
+	//获取配置
+	content, err := configClient.GetConfig(vo.ConfigParam{
+		DataId: global.NacosConfig.DataId,
+		Group:  global.NacosConfig.Group,
+	})
+
+	if err != nil {
+		panic(err)
+	}
+	// 读取到全局变量ServerConfig
+	err = json.Unmarshal([]byte(content), &global.ServerConfig)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(global.ServerConfig)
 ```
+
+---
+
+
+
+
+
+# 四. 商品服务
+
+
 
 
 

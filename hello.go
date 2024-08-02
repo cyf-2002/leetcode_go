@@ -2,44 +2,37 @@ package main
 
 import (
 	"fmt"
-	"golang.org/x/crypto/bcrypt"
+	"sort"
 )
 
-// HashPassword hashes a plain text password using bcrypt.
-func HashPassword(password string) (string, error) {
-	// Generate hashed password with default cost.
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	if err != nil {
-		return "", err
-	}
-	return string(hashedPassword), nil
+type TreeNode struct {
+	Val   int
+	Left  *TreeNode
+	Right *TreeNode
 }
 
-// CheckPasswordHash compares a bcrypt hashed password with its possible plaintext equivalent.
-func CheckPasswordHash(password, hashedPassword string) bool {
-	err := bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(password))
-	return err == nil
+func buildTree(preorder []int, inorder []int) *TreeNode {
+	if len(preorder) == 0 || len(inorder) == 0 {
+		return nil
+	}
+	v := preorder[0]
+
+	idx := sort.SearchInts(inorder, v)
+	leftInorder, rightInorder := inorder[:idx], inorder[idx+1:]
+	leftPreorder, rightPreorder := preorder[1:1+idx], preorder[1+idx:]
+
+	return &TreeNode{
+		Val:   v,
+		Left:  buildTree(leftPreorder, leftInorder),
+		Right: buildTree(rightPreorder, rightInorder),
+	}
 }
 
 func main() {
-	password := "mySuperSecretPassword"
+	pre := []int{3, 9, 20, 15, 7}
+	in := []int{9, 3, 15, 20, 7}
+	idx := sort.SearchInts(in, 3)
+	fmt.Println(idx)
+	fmt.Println(buildTree(pre, in))
 
-	// Generate hashed password
-	hashedPassword, err := HashPassword(password)
-	if err != nil {
-		fmt.Println("Error hashing password:", err)
-		return
-	}
-
-	fmt.Printf("Original password: %s\n", password)
-	fmt.Printf("Hashed password: %s\n", hashedPassword)
-
-	// Validate password
-	isValid := CheckPasswordHash(password, hashedPassword)
-	fmt.Printf("Password is valid: %v\n", isValid)
-
-	// Check with a wrong password
-	wrongPassword := "wrongPassword"
-	isValid = CheckPasswordHash(wrongPassword, hashedPassword)
-	fmt.Printf("Wrong password is valid: %v\n", isValid)
 }
