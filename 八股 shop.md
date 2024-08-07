@@ -707,6 +707,15 @@ service Goods{
 
 <img src="./assets/image-20240806170745640.png" alt="image-20240806170745640" style="zoom: 50%;" />
 
+```protobuf
+service Inventory {
+    rpc SetInv(GoodsInventoryInfo) returns (google.protobuf.Empty); //设置库存
+    rpc InvDetail(GoodsInventoryInfo) returns (GoodsInventoryInfo); //查询库存
+    rpc Sell(SellInfo) returns (google.protobuf.Empty);   //扣减库存
+    rpc Reback(SellInfo) returns (google.protobuf.Empty); //归还库存
+}
+```
+
 
 
 ## 1. 扣减库存
@@ -721,17 +730,15 @@ service Goods{
 	tx.Commit()
 ```
 
-2. 并发情况下可能会出现超卖、数据不一致：
+2. 并发情况下可能会出现超卖、数据不一致：分布式锁
 
+   1. 互斥性：setnx
 
+   2. 死锁：设置**过期时间**；业务没执行完----加入守护线程延长锁
 
+   3. 安全性：锁只能被持有该锁的用户删除，保证value值的唯一性可以防止锁在释放时被误删
 
-
-
-
-
-
-
+      释放锁：**Lua 脚本**，先 GET 判断锁是否归属自己，再DEL 释放锁
 
 
 
@@ -778,45 +785,174 @@ int cas(long *addr, long old, long new)
 
 
 
-### 2.3 基于redis实现分布式锁
+### 2.3 [基于redis实现分布式锁-redsync](https://cloud.tencent.com/developer/article/2211973)
 
-### 2.3.1 基于 setnx 的缺陷
+1. **创建redsync对象**
 
-Redis Setnx（**SET** if **N**ot e**X**ists） 命令在指定的 key 不存在时，为 key 设置指定的值。
+在该包中创建redsync对象是通过以下函数实现的：
 
-`SETNX lock.foo <current Unix time + lock timeout + 1>`
+```go
+redsync.NewPool(pool ...redis.Pool) *Redsync
+```
 
-如果 SETNX 返回1，说明该进程获得锁，SETNX将键 lock.foo 的值设置为锁的超时时间（当前时间 + 锁的有效时间）。
-如果 SETNX 返回0，说明其他进程已经获得了锁，进程不能进入临界区。进程可以在一个循环中不断地尝试 SETNX 操作，以获得锁。
+首先，我们看到该NewPool函数接收多个redis.Pool参数，我们再看Redsync的结构体，结构体中只有一个pool属性，并且是一个redis连接池的切片，说明可以有多个redis客户端连接池。同时通过注释可以得知，Redsync可以使用多个Redis连接池创建分布式锁。
 
-锁超时时，我们不能简单地使用 DEL 命令删除键 lock.foo 以释放锁。考虑以下情况，进程P1已经首先获得了锁 lock.foo，然后进程P1挂掉了。进程P2，P3正在不断地检测锁是否已释放或者已超时，P2先删除了锁并重新新建了锁，这时P3删除锁会删除掉P2的。
 
-`GETSET lock.foo <current Unix timestamp + lock timeout + 1>`
 
-由于 GETSET 操作在设置键的值的同时，还会返回键的旧值，通过比较键 lock.foo 的旧值是否小于当前时间，可以判断进程是否已获得锁。
+2. **创建互斥锁**
 
-> 不推荐使用redis的setnx方法，其本质是以下原因导致的：
+创建完Redsync实例后，就可以通过该实例中的NewMutex方法创建一个互斥锁了。就是实例化了一个Mutex对象。如下：
+
+```go
+// NewMutex returns a new distributed mutex with given name.
+func (r *Redsync) NewMutex(name string, options ...Option) *Mutex {
+    m := &Mutex{
+        name:   name,
+        expiry: 8 * time.Second,
+        tries:  32,
+        delayFunc: func(tries int) time.Duration {
+            return time.Duration(rand.Intn(maxRetryDelayMilliSec-minRetryDelayMilliSec)+minRetryDelayMilliSec) * time.Millisecond
+        },
+        genValueFunc:  genValue,
+        driftFactor:   0.01,
+        timeoutFactor: 0.05,
+        quorum:        len(r.pools)/2 + 1,
+        pools:         r.pools,
+    }
+    for _, o := range options {
+        o.Apply(m)
+    }
+    return m
+}
+```
+
+- genValueFunc：用于生成key的value。该value值会在删除锁时用到。其作用是防止被误删锁。
+- quorum：赋值len(r.pools)/2+1，也就是redis连接池数的一半+1。作用是用于**高可用性**。
+
+
+
+3. **加锁**
+
+加锁的本质就是使用setnx操作。
+
+> Redis Setnx（**SET** if **N**ot e**X**ists） 命令在指定的 key 不存在时，为 key 设置指定的值。
 >
-> 1. 缺乏原子性：
->    分布式锁的核心要求是原子性，即加锁和设置锁的过期时间应该是原子操作。然而，SETNX 命令只负责设置键的值，而不支持同时设置过期时间。这意味着你需要**先调用 SETNX，然后再调用 EXPIRE 来设置锁的过期时间**。这两个操作不是原子的，因此在它们之间可能发生一些导致不一致的情况，比如客户端在设置过期时间之前崩溃，导致锁永远不会被释放。
-> 2. 锁释放的安全性问题：
->    释放锁时，需要确保只有持有锁的客户端才能成功释放。使用 SETNX 时，简单的 DEL 命令用于释放锁，但这样**任何客户端都可以删除锁**，导致潜在的竞态条件。为了防止这种情况，通常需要结合客户端的唯一标识来验证锁的持有者，这增加了实现的复杂性，并且容易出错。
-> 3. 不支持可重入锁：
->    在分布式系统中，有时候同一个客户端可能需要多次获取同一个锁。使用 SETNX 实现的锁**不支持可重入性**，即一个客户端在持有锁的情况下再次请求锁时会被拒绝，这在实际应用中可能导致问题。
+> 如果 SETNX 返回1，说明该进程获得锁；如果 SETNX 返回0，说明其他进程已经获得了锁。
 
-### 2.3.2 使用Lua脚本来保证原子性
+将mutex对象中的name作为**key**，通过genValueFunc函数生成的随机值作为**value**，并且将mutex对象中的expiry属性作为**过期时间**
 
-### 2.3.3 redolock 解决分布式锁在集群环境中出现的问题
+```sql
+SET lock_key $unique_id EX $expire_time NX
+```
 
-setnx操作应该在多台服务器上进行：**多数同意**
+判断加锁成功的条件：
+
+1. 在进行加锁操作时，循环pools（存储的是redis的连接池），让每一个客户端连接都尝试进行setnx操作，如果**操作成功的数量多余所有连接的一半**，那么才认为是加锁成功。
+2. 进行加锁过程的处理时间已经接近过期时间，剩余的时间根本来不及处理加锁后的业务逻辑？？？
+   用有效期时间乘以一个**driftFactro因子**，该因子默认值是0.01，**根据业务设置**。
+
+```go
+now := time.Now()
+until := now.Add(m.expiry - now.Sub(start) - time.Duration(int64(float64(m.expiry)*m.driftFactor)))
+
+if n >= m.quorum && now.Before(until) {
+    m.value = value
+    m.until = until
+    return nil
+}
+```
 
 
 
+4. **释放锁**
+
+在加锁时给key设置了一个唯一的value值，在删除时进行判断，该value值是否是当前线程的
+**Lua 脚本**，先 GET 判断锁是否归属自己，再DEL 释放锁。
+
+```lua
+var deleteScript = redis.NewScript(1, `
+    if redis.call("GET", KEYS[1]) == ARGV[1] then
+        return redis.call("DEL", KEYS[1])
+    else
+        return 0
+    end
+`)
+```
 
 
 
+---
 
 
+
+# 六. 订单服务
+
+## 0. srv接口
+
+```protobuf
+service Order {
+    //购物车
+    rpc CartItemList(UserInfo) returns (CartItemListResponse); //获取用户购物车列表
+    rpc CreateCarItem(CartItemRequest) returns (ShopCartInfoResponse); //加入购物车
+    rpc UpdateCartItem(CartItemRequest) returns (google.protobuf.Empty); //修改购物车
+    rpc DeleteCartItem(CartItemRequest) returns (google.protobuf.Empty); //删除购物车
+
+    //订单
+    rpc CreateOrder(OrderRequest)returns (OrderInfoResponse); //创建订单
+    rpc OrderList(OrderFilterRequest) returns (OrderListResponse); // 订单列表
+    rpc OrderDetail(OrderRequest) returns (OrderInfoDetailResponse); // 订单详情,需要给出商品信息
+    rpc UpdateOrderStatus(OrderStatus) returns (google.protobuf.Empty); // 修改订单状态
+}
+```
+
+订单表结构：
+
+```go
+// OrderInfo 订单信息
+type OrderInfo struct {
+    BaseModel
+
+    User    int32  `gorm:"type:int;index"`
+    OrderSn string `gorm:"type:varchar(30);index"` //订单号，平台自己生成的订单号
+    PayType string `gorm:"type:varchar(20) comment 'alipay(支付宝)， wechat(微信)'"`
+
+    //status大家可以考虑使用iota来做
+    Status     string     `gorm:"type:varchar(20)  comment 'PAYING(待支付), TRADE_SUCCESS(成功)， TRADE_CLOSED(超时关闭), WAIT_BUYER_PAY(交易创建), TRADE_FINISHED(交易结束)'"`
+    TradeNo    string     `gorm:"type:varchar(100) comment '交易号'"` //交易号，其实就是支付宝或者微信的的订单号，用于查账
+    OrderMount float32    //订单金额
+    PayTime    *time.Time `gorm:"type:datetime"`
+
+    Address      string `gorm:"type:varchar(100)"`
+    SignerName   string `gorm:"type:varchar(20)"`
+    SingerMobile string `gorm:"type:varchar(11)"`
+    Post         string `gorm:"type:varchar(20)"` //留言信息
+}
+
+// OrderGoods 订单商品信息
+type OrderGoods struct {
+	BaseModel
+
+	Order int32 `gorm:"type:int;index"`
+	Goods int32 `gorm:"type:int;index"`
+
+	//把商品信息保存下来，但是字段冗余，不符合mysql三范式，但是高并发系统一般都不遵循三范式
+	// 商品的价格信息会变，以order为准
+	GoodsName  string `gorm:"type:varchar(100);index"`
+	GoodsImage string `gorm:"type:varchar(200)"`
+	GoodsPrice float32
+	Nums       int32 `gorm:"type:int"`
+}
+```
+
+
+
+## 1. 新建订单
+
+1.  从购物车获取商品信息
+2.  去查询商品服务(跨服务)
+3.  调用库存服务扣减库存(跨服务)
+4.  生成订单的基本信息表和订单的商品信息表
+5.  从购物车中删除已购买记录
 
 
 
