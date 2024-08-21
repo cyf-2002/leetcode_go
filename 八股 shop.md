@@ -8,9 +8,27 @@
 
 ---
 
-## 2.
+## 2. 微服务
+
+<img src="./assets/99350e76ce2f763ed5ce5ba6594941f8.png" alt="微服务组件示意图" style="zoom: 50%;" />
+
+### 2.1 nacos
+
+- 长轮询
+
+在长轮询模式下，客户端定时向服务端发起请求，检查配置信息是否发生变更。如果没有变更，服务端会"hold"住这个请求，即暂时不返回结果，直到配置发生变化或达到一定的超时时间。在等待期间，如果配置发生变更，服务端会立即返回结果给客户端，完成一次"推送"操作。
+
+![Nacos长轮询](./assets/16de67d4619e2844fb0812cf994cd7e7.png)
 
 
+
+### 2.2 API 网关
+
+1. 路由转发：API 网关根据请求的 URL 路径或其他标识，将请求路由到相应的后端服务。通过配置路由规则，可以灵活地将请求分发给不同的后端服务。
+2. 负载均衡：API 网关可以在后端服务之间实现负载均衡，将请求平均分发到多个实例上，提高系统的吞吐量和可扩展性。
+3. 安全认证与授权：API 网关可以集中处理身份验证和授权，确保只有经过身份验证的客户端才能访问后端服务。
+4. 缓存：API 网关可以缓存后端服务的响应，减少对后端服务的请求次数，提高系统性能和响应速度。
+5. 监控与日志：API 网关可以收集和记录请求的指标和日志，提供实时监控和分析，帮助开发人员和运维人员进行故障排查和性能优化。
 
 
 
@@ -71,7 +89,7 @@ global.DB.Scopes(Paginate(int(req.Pn), int(req.Psize))).Find(&users)
 
 ## 2. 创建用户
 
-### 2.1 加密算法
+### 2.1 密码加密 Bcrypt
 
 - **MD5信息摘要算法**
 
@@ -397,6 +415,8 @@ jwt.StandardClaims{
 
 ---
 
+
+
 ### 4.3 跨域请求
 
 在非简单请求且跨域的情况下，浏览器会在发起实际的跨域请求之前先发送一个 **`OPTIONS` 预检请求**。
@@ -416,7 +436,7 @@ jwt.StandardClaims{
 > - `text/plain`
 
 `````go
-// Cors 解决浏览器跨越问题，后端解决方法
+// Cors 解决浏览器跨域问题，后端解决方法
 func Cors() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		Method := c.Request.Method
@@ -522,7 +542,7 @@ func InitBaseRouter(router *gin.RouterGroup) {
 
 3. 源地址哈希：同一ip的请求映射到同一台服务器；服务器增减后会导致取模运算发生很大的改变。
 
-   > 一致性哈希算法将 key 映射到 2^32 的空间中，将这个数字首尾相连，形成一个环。
+   > 一致性哈希算法将 key 映射到 2^32 的空间中，将这个数字首尾相连，形成一个**哈希环**。
    >
    > - 计算节点/机器(通常使用节点的名称、编号和 IP 地址)的哈希值，放置在环上。
    > - 计算 key 的哈希值，放置在环上，顺时针寻找到的第一个节点，就是应选取的节点/机器。
@@ -684,13 +704,13 @@ service Goods{
 
 <img src="./assets/image-20240608222506761.png" alt="image-20240608222506761" style="zoom: 80%;" />
 
-## 1.1 内网穿透做回传
+### 1.1 内网穿透做回传
 
 服务提供商将内网主机，内网网口映射到HTTP网站，提供外网访问。将oss的callbackUrl修改为对应的HTTP网站。
 
 
 
-## 1.2 oss流程
+### 1.2 oss流程
 
 1. 生成上传凭证，用户需要从服务器获取一个上传凭证，这个凭证通常包含上传策略和签名，用于权限验证。
 2. 客户端上传文件，客户端使用获取到的上传凭证，将文件上传到OSS。上传凭证包含上传URL和必要的头信息，用于OSS服务的权限验证。
@@ -739,6 +759,71 @@ service Inventory {
    3. 安全性：锁只能被持有该锁的用户删除，保证value值的唯一性可以防止锁在释放时被误删
 
       释放锁：**Lua 脚本**，先 GET 判断锁是否归属自己，再DEL 释放锁
+
+
+
+3. 代码实现
+
+```go
+// Sell 扣减库存,涉及事务逻辑，执行的逻辑必须全部成功或者全部失败并且失败后数据可恢复,不能中途失败
+func (i *InventoryServer) Sell(ctx context.Context, req *proto.SellInfo) (*empty.Empty, error) {
+
+	stockDetail := model.StockSellDetail{
+		OrderSn: req.OrderSn,
+		Status:  1,
+	}
+
+	//并发情况下可能会出现超买，需要使用锁来将并发串行化
+	tx := global.DB.Begin()
+	var goodsdiscr []model.GoodsDetail
+	var mutexs []*redsync.Mutex
+	for _, goodsInfo := range req.GoodsInfo {
+		goodsdiscr = append(goodsdiscr, model.GoodsDetail{
+			Goods: goodsInfo.GoodsId,
+			Num:   goodsInfo.Num,
+		})
+
+		var inventory model.Inventory
+		mutex := global.Rs.NewMutex(fmt.Sprintf("goods_%d", goodsInfo.GoodsId))
+
+		if err := mutex.Lock(); err != nil {
+			return nil, status.Errorf(codes.Internal, "获取redis分布式锁异常")
+		}
+
+		if result := global.DB.Where(&model.Inventory{Goods: goodsInfo.GoodsId}).First(&inventory); result.RowsAffected == 0 {
+			//失败进行事务回滚
+			tx.Rollback()
+			return nil, status.Errorf(codes.InvalidArgument, "库存信息不存在")
+		}
+
+		if inventory.Stocks < goodsInfo.Num {
+			//失败进行事务回滚
+			tx.Rollback()
+			return nil, status.Errorf(codes.ResourceExhausted, "库存不足")
+		}
+		inventory.Stocks -= goodsInfo.Num
+		tx.Save(&inventory)
+
+		mutexs = append(mutexs, mutex)
+
+	}
+	stockDetail.Detail = goodsdiscr
+	if result := tx.Create(&stockDetail); result.RowsAffected == 0 {
+		tx.Rollback()
+		return nil, status.Errorf(codes.Internal, "保存扣减库存历史数据失败")
+	}
+
+	//提交事务
+	tx.Commit()
+
+	for _, mutex := range mutexs {
+		if ok, err := mutex.Unlock(); !ok || err != nil {
+			return nil, status.Errorf(codes.Internal, "释放redis分布式锁异常")
+		}
+	}
+	return &empty.Empty{}, nil
+}
+```
 
 
 
@@ -946,15 +1031,177 @@ type OrderGoods struct {
 
 
 
-## 1. 新建订单
+## 1. 新建订单(事务消息)
 
-1.  从购物车获取商品信息
-2.  去查询商品服务(跨服务)
-3.  调用库存服务扣减库存(跨服务)
-4.  生成订单的基本信息表和订单的商品信息表
-5.  从购物车中删除已购买记录
+问题：
+
+- 调用库存服务的接口时，网络拥塞，retry 导致重复归还；宕机导致无法归还
+- 本地代码异常，不知道本地代码的执行情况
+
+- 扣减库存成功，网络拥塞，导致本地事务回滚
 
 
+
+### 1.1 解决方案
+
+1. **TCC**
+
+![image-20240817124134526](./assets/image-20240817124134526.png)
+
+
+
+2. **基于可靠消息最终一致性方案**
+
+消费者应该确保这个消息能被正确消费--应该先预扣库存
+
+![image-20240817125301110](./assets/image-20240817125301110.png)
+
+
+
+
+
+### 1.2 订单服务--生产者代码
+
+```go
+// CreateOrder 新建订单 传递消息到本地事务
+func (O *OrderServer) CreateOrder(ctx context.Context, req *proto.OrderRequest) (*proto.OrderInfoResponse, error) {
+	// 使用消息队列,将扣减库存消息放入mq中
+	//初始化生产者
+	orderListener := OrderListener{Ctx: ctx}
+	q, err := rocketmq.NewTransactionProducer(&orderListener, producer.WithNameServer())
+    
+	//启动生产者
+	if err = q.Start(); err != nil {}
+
+	//生成订单的基本信息表
+	order := model.OrderInfo{
+		User:         req.UserId,
+		OrderSn:      GenerationSn(req.UserId),
+		Address:      req.Address,
+		SignerName:   req.Name,
+		SingerMobile: req.Mobile,
+		Post:         req.Post,
+	}
+    
+	//发送 归还库存 的事务消息
+	jsonString, err := json.Marshal(&order)
+	msg := primitive.NewMessage("order-reback", jsonString)
+	_, err = q.SendMessageInTransaction(context.Background(), msg)
+
+
+	return &proto.OrderInfoResponse{Id: orderListener.ID, OrderSn: order.OrderSn, Total: orderListener.OrderAmount}, nil
+}
+
+// ExecuteLocalTransaction  When send transactional prepare(half) message succeed, this method will be invoked to execute local transaction.
+func (o *OrderListener) ExecuteLocalTransaction(msgs *primitive.Message) primitive.LocalTransactionState {
+    //执行本地事务
+    //1. 从购物车获取商品信息
+    //2. 去查询商品服务(跨服务)
+    //3. 调用库存服务扣减库存(跨服务)
+    //4. 订单的基本信息表 和订单的商品信息表
+    //5. 从购物车中删除已购买记录
+	...
+    // 在调用库存服务之前 err ：rollback 归还库存 的消息
+    // 在之后 err           ：commit 归还库存  的消息
+    ...
+
+    // 全部成功以后发送延时消息---订单超时回查
+    msg := primitive.NewMessage("order_timeout", msgs.Body)
+    msg.WithDelayTimeLevel(4)
+    _, err = global.MQOrder.SendSync(context.Background(), msg)
+    if err != nil {
+       zap.S().Errorf("发送延时消息失败: %v\n", err)
+       return primitive.CommitMessageState
+    }
+
+    fmt.Println("业务执行成功，不需要向mq提交消息")
+    return primitive.RollbackMessageState
+}
+
+// CheckLocalTransaction When no response to prepare(half) message. broker will send check message to check the transaction status, and this method will be invoked to get local transaction status.
+func (o *OrderListener) CheckLocalTransaction(msg *primitive.MessageExt) primitive.LocalTransactionState {
+    //消息回查
+    var OrderInfo model.OrderInfo
+    _ = json.Unmarshal(msg.Body, &OrderInfo)
+
+    //查订单号
+    if result := global.DB.Where(model.OrderInfo{OrderSn: OrderInfo.OrderSn}).First(&OrderInfo); result.RowsAffected == 0 {
+       return primitive.CommitMessageState //这里并不能说明库存被扣减了
+    }
+
+    return primitive.RollbackMessageState
+}
+```
+
+订单微服务监听订单超时消息
+
+```go
+    // 监听超时支付消息topic
+    // 初始化消费者
+    c, _ := rocketmq.NewPushConsumer()
+
+    // 订阅消息
+    err = c.Subscribe(global.ServerConfig.MqInfo.Topic, consumer.MessageSelector{}, handler.TimeOutReback)
+```
+
+
+
+### 1.3 库存服务--消费者代码
+
+```go
+	// 库存微服务--监听库存扣减消息topic
+	// 初始化消费者
+	c, _ := rocketmq.NewPushConsumer()
+	// 订阅消息
+	err = c.Subscribe(global.ServerConfig.MqInfo.Topic, consumer.MessageSelector{}, handler.AutoReback)
+
+// 归还库存的具体方法
+func AutoReback(ctx context.Context, msgs ...*primitive.MessageExt) (consumer.ConsumeResult, error) {
+	type OrderInfo struct {
+		OrderSn string
+	}
+	for i := range msgs {
+		// 生产者成功扣除库存后，将订单信息发送至mq,消费者inventory并做归还库存操作
+		// 归还商品，应该知道每一件商品归还多少件
+		// 此接口需要幂等性，不能因为消息多次重复发送，导致商品重复归还
+		// 解决方案：新建一张表，记录详细的订单扣减记录，以及归还细节
+
+		var orderInfo OrderInfo
+		err := json.Unmarshal(msgs[i].Body, &orderInfo)
+
+		//库存扣减记录
+		var stockSellDetail model.StockSellDetail
+		//开始事务
+		tx := global.DB.Begin()
+
+		//获取需要归还的库存
+		if result := tx.Model(&model.StockSellDetail{}).Where(&model.StockSellDetail{OrderSn: orderInfo.OrderSn, Status: 1}).First(&stockSellDetail); result.RowsAffected == 0 {
+			return consumer.ConsumeSuccess, nil
+		}
+		//如果查询到，各个归还
+		for _, orderGoods := range stockSellDetail.Detail {
+			//先查询inventory, update语句update xxx set stocks=stocks+2 当多个并发进入mysql会自动锁住，更安全
+			if result := tx.Model(&model.Inventory{}).Where(&model.Inventory{Goods: orderGoods.Goods}).Update("stocks", gorm.Expr("stocks+?", orderGoods.Num)); result.RowsAffected == 0 {
+				tx.Rollback()
+				//过一段时间重新消费ConsumeRetryLater
+				return consumer.ConsumeRetryLater, nil
+			}
+
+			//更新状态
+			if result := tx.Model(&model.StockSellDetail{}).Where(&model.StockSellDetail{OrderSn: stockSellDetail.OrderSn}).Update("status", 2); result.RowsAffected == 0 {
+				tx.Rollback()
+				return consumer.ConsumeRetryLater, nil
+			}
+		}
+		tx.Commit()
+
+		return consumer.ConsumeSuccess, nil
+	}
+	return consumer.ConsumeSuccess, nil
+}
+
+
+```
 
 
 
@@ -971,7 +1218,218 @@ type OrderGoods struct {
 
 
 
-# 七. 微服务
+# 七. 分布式事务
+
+## 1. 分布式事务
+
+<img src="./assets/image-20240611012102295.png" alt="image-20240611012102295" style="zoom:67%;" />
+
+### 1.1 单机数据库事务
+
+扣减库存涉及事务逻辑，执行的逻辑必须全部成功或者全部失败并且失败后数据可恢复,不能中途失败。
+
+利用数据库事务实现扣减库存的逻辑：**原子性、一致性、隔离性、持久性**
+
+```go
+tx := global.DB.Begin()
+//失败进行事务回滚
+tx.Rollback()
+//提交事务
+tx.Commit()
+```
+
+
+
+### 1.2.1 CAP理论
+
+> - Consistency（强一致性）
+>   对于客户端的每次读操作，要么读到的是最新的数据，要么读取失败。换句话说，一致性是站在分布式系统的角度，对访问本系统的客户端的一种承诺：要么我给您返回一个错误，要么我给你返回绝对一致的最新数据，不难看出，其强调的是**数据正确**。
+>
+> - Availability（可用性）
+>
+>   任何客户端的请求都能得到响应数据，不会出现响应错误。换句话说，可用性是站在分布式系统的角度，对访问本系统的客户的另一种承诺：我**一定会返回数据**，不会给你返回错误，但**不保证数据最新**，强调的是不出错。
+>
+> - Partition tolerance（分区容错性）
+>   由于分布式系统通过网络进行通信，网络是不可靠的。当任意数量的消息丢失或延迟到达时，系统仍会继续提供服务，**不会挂掉**。换句话说，分区容忍性是站在分布式系统的角度，对访问本系统的客户端的再一种承诺：我会一直运行，不管我的内部出现何种数据同步问题，强调的是不挂掉。
+
+### 1.2.2 BASE理论  raft  弱一致性
+
+> - 基本可用（Basically Available）
+>   分布式系统在出现故障的时候，允许损失部分可用性（例如响应时间、功能上的可用性）。
+> - 软状态（ Soft State）
+>   允许系统存在中间状态，而该中间状态不会影响系统整体可用性。
+> - 最终一致性（ Eventual Consistency）
+>   系统中的所有数据副本经过一定时间后，最终能够达到一致的状态。
+
+
+
+### 1.3  2PC
+
+两阶段提交，将事务的提交过程分为资源准备和资源提交两个阶段，并且由事务协调者来协调所有事务参与者。
+
+- **所有参与节点都是事务阻塞性的**	B故障、A也一直锁住
+- **高度依赖事务管理器**   协调者发生故障
+- commit阶段协调者宕机 数据不一致
+
+<img src="./assets/774f089e7d4f4aae8af79314cf317d5a.png" alt="img" style="zoom: 80%;" />
+
+
+
+### 1.4  TCC（Try Confirm Cancel）
+
+TCC的执行流程可以分为两个阶段，分别如下：
+
+（1）第一阶段：Try，业务系统做检测并预留资源 (加锁，锁住资源)，比如常见的下单，在try阶段，我们不是真正的减库存，而是把下单的库存给锁定住。**增加一个 freeze 变量记录锁住的库存**
+
+（2）第二阶段：根据第一阶段的结果决定是执行confirm还是cancel
+
+- Confirm：执行真正的业务（执行业务，释放锁）
+- Cancle：是对Try阶段预留资源的释放（出问题，释放锁）
+
+<img src="./assets/fff26246488d4638a321ab656303a216.png" alt="img" style="zoom: 67%;" />
+允许cancel空回滚；处理cancel空回滚后记录事务id，不再处理延迟到大的try操作；业务耦合度较高
+
+- 对微服务的侵入性强，每个事务都必须实现 Try - Confirm - Cancel 三个方法
+- 三个方法都要实现幂等控制，通常可以使用事务 xid 或业务主键判重来控制
+- 事务协调器要记录日志，使用到redis
+- 要加锁
+
+
+
+### 1.5 基于本地消息的最终一致性
+
+![img](./assets/4ae385034213403fa74f5374b226e505.png)
+
+将消息写到日志表后，启动独立的线程，**定时扫描日志表**中的消息并发送到消息中间件，**只有在反馈发送成功后才删除消息日志**，否则等待定时任务重试。
+
+
+
+### 1.6 基于MQ事务消息的最终一致性
+
+业务逻辑简单、高并发
+
+![img](./assets/033c99659a5349f6bfc9f8afb83709b1.png)
+
+在断网或者应用重启等异常情况下，图中的步骤④提交的二次确认超时未到达 MQ Server，此时的处理逻辑如下：
+
+- 步骤⑤：MQ Server 对该消息发起消息回查
+- 步骤⑥：发送方收到消息回查后，需要检查对应消息的本地事务执行的最终结果
+- 步骤⑦：发送方根据检查得到的本地事务的最终状态再次提交二次确认。
+- 最终步骤：MQ Server基于 commit/rollback 对消息进行投递或者删除。
+
+
+
+### 1.7 最大努力通知
+
+最大努力通知，事务主动方仅仅是尽最大努力（重试，轮询....）将事务发送给事务接收方，所以存在事务被动方接收不到消息的情况，此时需要**事务被动方主动调用事务主动方的消息校对接口**查询业务消息并消费，这种通知的**可靠性是由事务被动方保证**的。
+
+---
+
+
+
+## 2. RocketMQ
+
+> 解耦：各个微服务之间可以基于 MQ 完成相互调用，不需要写在同一个主线程下面
+>
+> 削峰：将大量请求缓存下来，保护MySQL；经济考量，高流量场景不常见
+>
+> 数据分发：增加一个系统--取出来消费；减少一个系统--取消消费
+>
+> 选择rocketmq：**延迟消息**简单有效；**完善的事务消息**功能；可以定制化开发；日志采集功能无脑kafka
+
+### 2.1 重要概念
+
+- **Name 服务器（NameServer）**：充当注册中心，类似 Kafka 中的 Zookeeper。
+- **Broker**: 一个独立的 RocketMQ 服务器就被称为 broker，broker 接收来自生产者的消息，为消息设置偏移量。
+- **主题（Topic）**：消息的第一级类型，一条消息必须有一个 Topic。
+- **子主题（Tag）**：消息的第二级类型，同一业务模块不同目的的消息就可以用相同 Topic 和不同的 Tag 来标识。
+- **分组（Group）**：一个组可以订阅多个 Topic，包括生产者组和消费者组。**负载均衡**：不重复消费
+- **队列（Queue）**：可以类比 Kafka 的分区 Partition。
+
+
+
+### 2.2 RocketMQ 工作原理
+
+RockerMQ 中的消息模型就是按照主题模型所实现的，包括 Producer Group、Topic、Consumer Group 三个角色。
+
+**为了提高并发能力，一个 Topic 包含多个 Queue**，生产者组根据主题将消息放入对应的 Topic，下图是采用轮询的方式找到里面的 Queue。
+
+RockerMQ 中的消费群组和 Queue，可以类比 Kafka 中的消费群组和 Partition：不同的消费者组互不干扰，**一个 Queue 只能被一个消费者消费**，一个消费者可以消费多个 Queue。
+
+> 保证了**顺序消费**：消费者1去Queue拿订单生成，它就锁住了整个Queue
+
+消费 Queue 的过程中，通过偏移量记录消费的位置。
+
+![_PQGWGV_CV6@ZF}6@}SJ7X3.png](./assets/19adba9940af45a2877a0f6c97a25001.png)
+
+
+
+### 2.3 RocketMQ 架构
+
+RocketMQ 技术架构中有四大角色 NameServer、Broker、Producer 和 Consumer，下面主要介绍 Broker。
+
+**Broker 用于存放 Queue，一个 Broker 可以配置多个 Topic，一个 Topic 中存在多个 Queue。**
+
+如果某个 Topic 消息量很大，应该给它多配置几个 Queue，并且尽量多分布在不同 broker 上，以减轻某个 broker 的压力。Topic 消息量都比较均匀的情况下，如果某个 broker 上的队列越多，则该 broker 压力越大。
+
+<img src="./assets/15fc490a03c240a692fa44aeb0bc6f2a.png" alt="img" style="zoom: 50%;" />
+
+简单提一下，Broker 通过集群部署，并且提供了 master/slave 的结构，slave 定时从 master 同步数据（同步刷盘或者异步刷盘），如果 master 宕机，则 slave 提供消费服务，但是不能写入消息。
+
+
+
+### 2.4 订单服务和库存服务
+
+调用库存服务前先发送一个归还库存的mq，成功调用库存创建订单就commit
+下单不支付？订单服务完成后发送一个延迟消息，未支付就commit，库存服务收到延时消息归还库存
+
+![image-20240611171702348](./assets/image-20240611171702348.png)
+
+
+
+### 2.5 解决重复消费问题？
+
+RocketMQ 选择了确保一定投递，**保证消息不丢失**，但有可能造成消息重复。
+
+- 状态判断法：消费者消费数据后把消费数据记录在 redis 中，下次消费时先到 redis 中查看**是否存在该消息**，存在则表示消息已经消费过，直接丢弃消息。(增大redis和MySQL的压力)
+- 业务判断法：通常数据消费后都需要插入到数据库中，使用数据库的唯一性约束防止重复消费。**每次消费直接尝试插入数据，如果提示唯一性字段重复，则直接丢失消息。**
+
+
+
+### 2.6 保证消息的可用性/可靠性/不丢失呢？
+
+消息可能在哪些阶段丢失呢？可能会在这三个阶段发生丢失：生产阶段、存储阶段、消费阶段。
+
+- 在生产阶段，主要**通过请求确认机制，来保证消息的可靠传递**。相应失败应该重试
+- 存储阶段，可以通过**配置可靠性优先的 Broker 参数来避免因为宕机丢消息**。
+  - 消息持久化到 CommitLog
+  - 同步刷盘； Producer 发送消息后等数据持久化到磁盘之后再返回响应给 Producer
+  - Broker 支持 Master 和 Slave 同步复制、Master 和 Slave 异步复制模式
+- 消费阶段，在**执行完所有消费业务逻辑**之后，再发送消费确认。
+
+
+
+### 2.7 RocketMQ 怎么实现延时消息的？
+
+RocketMQ 会将消息先存储到对应的延时队列中，然后通过一个定时任务轮询这些队列，到期后，把消息投递到目标 Topic 的队列中。
+
+<img src="./assets/weixin-mianznxrocketmqessw-e3b68480-8006-4cd6-892a-1c72f8b0fbcb.jpg" alt="延迟消息处理流程-图片来源见水印" style="zoom:33%;" />
+
+
+
+### 2.8 RocketMQ 工作流程
+
+1. Broker 在启动的时候去向所有的 NameServer 注册，并保持**长连接**，每 **30s 发送一次心跳**
+2. Producer 在发送消息的时候从 NameServer 获取 Broker 服务器地址，根据负载均衡算法选择一台服务器来发送消息
+3. Conusmer 消费消息的时候同样从 NameServer 获取 Broker 地址，然后主动拉取消息来消费
+
+<img src="./assets/weixin-mianznxrocketmqessw-ec571bd4-fa24-4ada-87ab-f761a7dfdf3f.jpg" alt="RocketMQ整体工作流程" style="zoom: 50%;" />
+
+
+
+
+
+# 八. 微服务
 
 ## 1. elasticsearch
 
@@ -1016,6 +1474,8 @@ type OrderGoods struct {
 - bool："must" "must_not" "should"
 
 ```go
+	//es的目的是搜索出符合条件的id，具体的字段信息通过MySQL获取
+	//es和MySQL互补！es中只保存用来搜索和过滤的字段信息	
 	//初始化筛选器
 	q := elastic.NewBoolQuery()
 	//关键词搜索、查询新品、查询热门商品、通过价格区间筛选
@@ -1047,6 +1507,10 @@ type OrderGoods struct {
 
 ### 1.2 中文分词器插件 ik
 
+Standard Analyzer会将 “中华牙膏” 分词--- "中", "华", "牙", "膏"
+
+- 粒度越大，表达越准确，召回越少
+
 ik_max_word、ik_smart
 
 ```go
@@ -1062,11 +1526,11 @@ GET _analyze
 ### 1.3 mapping
 
 1. **`text` 类型**
-   - **描述**：用于存储大段文本数据，会进行分词和倒排索引。
+   - **描述**：用于存储大段文本数据，会进行**分词和倒排索引**。
    - **效果**：适用于全文搜索，可以对文本进行分词、匹配关键词。例如，搜索商品名称或描述时，可以分词匹配相关词汇。
 2. **`keyword` 类型**
-   - **描述**：用于存储不需要分词的文本数据（如标签、ID、状态等），适合精确匹配。
-   - **效果**：适用于过滤和聚合操作，支持排序、聚合等操作。例如，搜索商品分类、品牌名称时可以使用精确匹配。
+   - **描述**：用于存储**不需要分词**的文本数据（如标签、ID、状态等），适合精确匹配。
+   - **效果**：适用于过滤和聚合操作，支持排序、聚合等操作。例如，搜索商品分类、品牌名称时可以使用精确匹配。  
 3. **`integer` 类型**
    - **描述**：用于存储整数数据。
    - **效果**：适用于数值范围查询和排序操作。例如，查询商品的库存数量、商品的点击数等。
@@ -1084,6 +1548,9 @@ GET _analyze
    - **效果**：适用于大数值的范围查询和排序操作。例如，统计商品的销售数量等。
 
 ```go
+// 返回一个 Elasticsearch 索引的映射（mapping）
+// mapping 映射定义了索引中每个字段的类型和分析策略
+// 在创建 Elasticsearch 索引时调用
 func (EsGoods) GetMapping() string {
 	goodsMapping := `
 	{
@@ -1142,7 +1609,9 @@ func (EsGoods) GetMapping() string {
 
 
 
-### 1.4 钩子绑定到MySQL
+### 1.4 Gorm 钩子保存信息到es
+
+开启事务，确保数据的一致性
 
 ```go
 // AfterCreate Gorm中的钩子，调用对象后自动调用该方法，保存商品信息到es
@@ -1174,166 +1643,43 @@ func (g *Goods) AfterDelete(tx *gorm.DB) (err error) {
 
 
 
-## 15. 分布式事务
 
-![image-20240608231828918](./assets/image-20240608231828918.png)
 
-<img src="./assets/image-20240611012102295.png" alt="image-20240611012102295" style="zoom:67%;" />
+## 2. 服务雪崩 Sentinel
 
-### 15.1 单机数据库事务
+在微服务之间进行服务调用是由于某一个服务故障，导致级联服务故障的现象，称为雪崩效应。要防止系统发生雪崩，就必须要有容错设计。
 
-扣减库存涉及事务逻辑，执行的逻辑必须全部成功或者全部失败并且失败后数据可恢复,不能中途失败。
+- **服务高可用部署**，通过冗余部署、故障转移等方式来减少单点故障的影响。
 
-利用数据库事务实现扣减库存的逻辑：原子性、一致性、隔离性、持久性
+- **对非核心业务功能采用熔断和服务降级**的措施来保护核心业务功能正常服务
 
-```go
-tx := global.DB.Begin()
-//失败进行事务回滚
-tx.Rollback()
-//提交事务
-tx.Commit()
-```
+- **对核心功能服务需要采用限流**的措施。
 
-### 15.2.1 CAP理论
 
-> - Consistency（强一致性）
->   对于客户端的每次读操作，要么读到的是最新的数据，要么读取失败。换句话说，一致性是站在分布式系统的角度，对访问本系统的客户端的一种承诺：要么我给您返回一个错误，要么我给你返回绝对一致的最新数据，不难看出，其强调的是**数据正确**。
->
-> - Availability（可用性）
->
->   任何客户端的请求都能得到响应数据，不会出现响应错误。换句话说，可用性是站在分布式系统的角度，对访问本系统的客户的另一种承诺：我**一定会返回数据**，不会给你返回错误，但**不保证数据最新**，强调的是不出错。
->
-> - Partition tolerance（分区容错性）
->   由于分布式系统通过网络进行通信，网络是不可靠的。当任意数量的消息丢失或延迟到达时，系统仍会继续提供服务，**不会挂掉**。换句话说，分区容忍性是站在分布式系统的角度，对访问本系统的客户端的再一种承诺：我会一直运行，不管我的内部出现何种数据同步问题，强调的是不挂掉。
 
-### 15.2.2 BASE理论  raft  弱一致性
+### 2.1 服务限流(预热、冷启动)
 
-> - 基本可用（Basically Available）
->   分布式系统在出现故障的时候，允许损失部分可用性（例如响应时间、功能上的可用性）。
-> - 软状态（ Soft State）
->   允许系统存在中间状态，而该中间状态不会影响系统整体可用性。
-> - 最终一致性（ Eventual Consistency）
->   系统中的所有数据副本经过一定时间后，最终能够达到一致的状态。
+系统长时间处理低水平请求状态，当大量请求突然到来时，并非所有请求都放行，而是**慢慢的增加请求**，目的时防止大量请求冲垮应用，达到保护应用的目的。
 
-### 15.3  2PC
-
-两阶段提交，将事务的提交过程分为资源准备和资源提交两个阶段，并且由事务协调者来协调所有事务参与者。
-
-- 所有参与节点都是事务阻塞性的
-- 协调者发生故障
-- commit阶段协调者宕机 数据不一致
-
-<img src="./assets/774f089e7d4f4aae8af79314cf317d5a.png" alt="img" style="zoom: 80%;" />
-
-
-
-### 15.4  TCC（Try Confirm Cancel）
-
-TCC的执行流程可以分为两个阶段，分别如下：
-
-（1）第一阶段：Try，业务系统做检测并预留资源 (加锁，锁住资源)，比如常见的下单，在try阶段，我们不是真正的减库存，而是把下单的库存给锁定住。
-
-（2）第二阶段：根据第一阶段的结果决定是执行confirm还是cancel
-
-- Confirm：执行真正的业务（执行业务，释放锁）
-- Cancle：是对Try阶段预留资源的释放（出问题，释放锁）
-
-<img src="./assets/fff26246488d4638a321ab656303a216.png" alt="img" style="zoom: 67%;" />
-
-由于网络原因或者重试操作都有可能导致 Try - Confirm - Cancel 3个操作的重复执行，所以使用 TCC 时需要注意这三个操作的幂等控制，通常我们可以使用事务 xid 或业务主键判重来控制。
-允许cancel空回滚；处理cancel空回滚后记录事务id，不再处理延迟到大的try操作；业务耦合度较高
-
-### 15.5 基于本地消息的最终一致性
-
-![img](./assets/4ae385034213403fa74f5374b226e505.png)
-
-将消息写到日志表后，启动独立的线程，定时扫描日志表中的消息并发送到消息中间件，只有在反馈发送成功后才删除消息日志，否则等待定时任务重试。
-
-### 15.6 基于MQ事务消息的最终一致性
-
-业务逻辑简单、高并发
-
-![img](./assets/033c99659a5349f6bfc9f8afb83709b1.png)
-
-在断网或者应用重启等异常情况下，图中的步骤④提交的二次确认超时未到达 MQ Server，此时的处理逻辑如下：
-
-- 步骤⑤：MQ Server 对该消息发起消息回查
-- 步骤⑥：发送方收到消息回查后，需要检查对应消息的本地事务执行的最终结果
-- 步骤⑦：发送方根据检查得到的本地事务的最终状态再次提交二次确认。
-- 最终步骤：MQ Server基于 commit/rollback 对消息进行投递或者删除。
-
-### 15.7 最大努力通知
-
-最大努力通知，事务主动方仅仅是尽最大努力（重试，轮询....）将事务发送给事务接收方，所以存在事务被动方接收不到消息的情况，此时需要**事务被动方主动调用事务主动方的消息校对接口**查询业务消息并消费，这种通知的可靠性是由事务被动方保证的。
-
----
-
-
-
-## 16. MQ
-
-> 解耦、削峰、数据分发
->
-> 选择rocketmq：延迟消息简单有效；完善的事务消息功能
-
-### 16.1 重要概念
-
-- **Name 服务器（NameServer）**：充当注册中心，类似 Kafka 中的 Zookeeper。
-- **Broker**: 一个独立的 RocketMQ 服务器就被称为 broker，broker 接收来自生产者的消息，为消息设置偏移量。
-- **主题（Topic）**：消息的第一级类型，一条消息必须有一个 Topic。
-- **子主题（Tag）**：消息的第二级类型，同一业务模块不同目的的消息就可以用相同 Topic 和不同的 Tag 来标识。
-- **分组（Group）**：一个组可以订阅多个 Topic，包括生产者组和消费者组。**负载均衡**：不重复消费
-- **队列（Queue）**：可以类比 Kafka 的分区 Partition。
-
-
-
-### 16.2 RocketMQ 工作原理
-
-RockerMQ 中的消息模型就是按照主题模型所实现的，包括 Producer Group、Topic、Consumer Group 三个角色。
-
-**为了提高并发能力，一个 Topic 包含多个 Queue**，生产者组根据主题将消息放入对应的 Topic，下图是采用轮询的方式找到里面的 Queue。
-
-RockerMQ 中的消费群组和 Queue，可以类比 Kafka 中的消费群组和 Partition：**不同的消费者组互不干扰，一个 Queue 只能被一个消费者消费，一个消费者可以消费多个 Queue。**
-
-消费 Queue 的过程中，通过偏移量记录消费的位置。
-
-![_PQGWGV_CV6@ZF}6@}SJ7X3.png](./assets/19adba9940af45a2877a0f6c97a25001.png)
-
-
-
-### 16.3 RocketMQ 架构
-
-RocketMQ 技术架构中有四大角色 NameServer、Broker、Producer 和 Consumer，下面主要介绍 Broker。
-
-**Broker 用于存放 Queue，一个 Broker 可以配置多个 Topic，一个 Topic 中存在多个 Queue。**
-
-如果某个 Topic 消息量很大，应该给它多配置几个 Queue，并且尽量多分布在不同 broker 上，以减轻某个 broker 的压力。Topic 消息量都比较均匀的情况下，如果某个 broker 上的队列越多，则该 broker 压力越大。
-
-<img src="./assets/15fc490a03c240a692fa44aeb0bc6f2a.png" alt="img" style="zoom: 50%;" />
-
-简单提一下，Broker 通过集群部署，并且提供了 master/slave 的结构，slave 定时从 master 同步数据（同步刷盘或者异步刷盘），如果 master 宕机，则 slave 提供消费服务，但是不能写入消息。
-
-### 16.4 订单服务和库存服务
-
-调用库存服务前先发送一个归还库存的mq，成功调用库存创建订单就commit
-下单不支付？订单服务完成后发送一个延迟消息，未支付就commit，库存服务收到延时消息归还库存
-
-![image-20240611171702348](./assets/image-20240611171702348.png)
-
-
-
-## 17.服务雪崩
-
-在微服务之间进行服务调用是由于某一个服务故障，导致级联服务故障的现象，称为雪崩效应。
-要防止系统发生雪崩，就必须要有容错设计。如果遇到突增流量，一般的做法是**对非核心业务功能采用熔断和服务降级**的措施来保护核心业务功能正常服务，而**对核心功能服务需要采用限流**的措施。
-
-### 17.1 服务限流(预热、冷启动)
-
-系统长时间处理低水平请求状态，当大量请求突然到来时，并非所有请求都放行，而是慢慢的增加请求，目的时防止大量请求冲垮应用，达到保护应用的目的。Sentinel中冷启动是采用令牌桶算法实现。令牌桶算法图例如下：
+Sentinel中冷启动是采用**令牌桶算法**实现。令牌桶算法图例如下：
 
 ![在这里插入图片描述](./assets/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L3FxXzMzODExNzM2,size_16,color_FFFFFF,t_70#pic_center.png)
 
-### 17.2 服务熔断 sentinel
+- **基于QPS**对某个资源限流
+
+1. **大周期**的配置能够做到流量的无损，前提是保证系统能够抗住，**脉冲流量**可能直接把系统打挂
+2. **毫秒级别**的流控能够很好的应对脉冲流量，保障系统稳定性，脉冲流量很大可能造成有损。
+
+
+
+- 字段 `ControlBehavior` 表示表示流量控制器的**控制行为**，目前 Sentinel 支持两种控制行为：
+
+1. Reject：表示如果当前统计周期内，统计结构统计的请求数超过了阈值，就直接拒绝。
+2. Throttling：表示**匀速排队**的统计策略。它的中心思想是，**以固定的间隔时间让请求通过**。计算当前请求的**预期通过时间**，如果该请求的预期通过时间小于规则预设的 timeout 时间 `MaxQueueingTimeMs` ，则该请求会排队等待处理；若超出最大排队时长，则直接拒接这个请求。
+
+
+
+### 2.2 服务熔断
 
 > 向调用方法返回一个符合预期的、可处理的备选响应（FallBack），保证服务调用方的线程不会被⻓时间占用，避免故障在分布式系统中蔓延，乃至雪崩。如果目标服务情况好转则恢复调用。
 
@@ -1347,50 +1693,56 @@ RocketMQ 技术架构中有四大角色 NameServer、Broker、Producer 和 Consu
 
 2. 熔断策略
 
-   > 支持设置静默期（MinRequestAmount），资源请求数小于该值时，不用遵守以下策略修改熔断器状态。
+   支持设置**静默期**（MinRequestAmount），资源请求数小于该值时，不用遵守以下策略修改熔断器状态。
 
-- 慢调用比例策略 (SlowRequestRatio)：
+- **慢调用比例**策略 (SlowRequestRatio)：
 
-该策略下需要设置允许的调用 RT 临界值（即**最大的响应时间**），对该资源访问的响应时间大于该阈值则统计为**慢调用**。
+该策略下需要设置允许的调用 RT 临界值（即**最大的响应时间**），对该资源访问的响应时间大于该阈值则统计为慢调用。
 
-- 错误比例策略 (ErrorRatio)：
+- **错误比例**策略 (ErrorRatio)：
 
-统计周期内**资源请求访问异常的比例大于设定的阈值**，则接下来的熔断周期内对资源的访问会自动地被熔断。
+统计周期内资源请求访问异常的比例大于设定的阈值，则接下来的熔断周期内对资源的访问会自动地被熔断。
 
-- 错误计数策略 (ErrorCount)：
+- **错误计数**策略 (ErrorCount)：
 
-统计周期内**资源请求访问异常数大于设定的阈值**，则接下来的熔断周期内对资源的访问会自动地被熔断。
+统计周期内资源请求访问异常数大于设定的阈值，则接下来的熔断周期内对资源的访问会自动地被熔断。
 
 <img src="./assets/om3es3ssxhj6q_d35fbb1c26ad407a8327b58f195a7443.png" alt="img" style="zoom:80%;" />
 
 
 
-### 17.3 幂等性
+### 2.3 幂等性
 
 解决雪崩，可以加入**超时和重试机制**，否则请求堆积，服务扛不住并发。
-调用方对一个系统进行重复调用（参数全部相同），不论重复调用多少次，这些**调用对系统的影响都是相同的效果**。
+调用方对一个系统进行重复调用（参数全部相同），不论重复调用多少次，这些**调用对系统的影响都是相同的效果**。（主要关注 post 请求）
 
-### 17.3.1 控制重复请求(从源头)
+### 2.3.1 控制重复请求(从源头)
 
 1. 控制操作次数，例如：提交按钮仅可操作一次（提交动作后按钮置灰）。
 2. 及时重定向，例如：下单/支付成功后跳转到成功提示页面，这样消除了浏览器前进或后退造成的重复提交问题。
 
-### 17.3.2 **过滤重复请求
 
-#### 17.3.2.1 分布式锁
 
-利用 Redis 记录当前处理的业务标识，当检测到没有此任务在处理中，就进入处理，否则判为重复请求，可做过滤处理。
+### 2.3.2 **过滤重复请求
+
+#### 2.3.2.3 唯一索引
+
+加唯一索引是个非常简单但很有效的办法，生成一个分布式 ID，如果重复插入数据的话，就会抛出异常，为了保证幂等性，一般需要捕获这个异常。
+
+#### 2.3.2.2 分布式锁
+
+利用 Redis 记录当前处理的**业务标识**，当检测到没有此任务在处理中，就进入处理，否则判为重复请求，可做过滤处理。
 
 1. 订单发起支付请求，支付系统会去 Redis 缓存中查询是否存在该订单号的 Key。
-2. 如果缓存key不存在，则向 Redis 增加缓存 Key为订单号（主要是通过Redis的SETNX命令来实现），添加Key成功的那个线程开始执行业务逻辑。业务逻辑处理完成后需要删除该订单号的缓存 Key，进行释放锁资源。
-3. 如果缓存key存在，则直接返回重复标记给客户端，这样通过 Redis做到了分布式锁，只有这次请求完成，下次请求才能进来。
+2. 如果缓存key不存在，则**向 Redis 增加缓存 Key为订单号**（主要是通过Redis的SETNX命令来实现），添加Key成功的那个线程开始执行业务逻辑。业务逻辑处理完成后需要删除该订单号的缓存 Key，进行释放锁资源。
+3. 如果缓存key存在，则直接**返回重复标记**给客户端，这样通过 Redis做到了分布式锁，只有这次请求完成，下次请求才能进来。
 
-#### 17.3.2.2 token 令牌
+#### 2.3.2.3 token 令牌
 
-1. 服务端提供了发送 token 的接口。执行业务前先去获取 token，同时服务端会把 token 保存到 redis 中；
+1. 服务端提供了发送 token 的接口。**执行业务前先去获取 token**，同时服务端会把 token 保存到 redis 中；
 2. 业务端发起业务请求时，携带 token，一般放在请求头部；
-3. 服务器判断 token 是否存在 redis 中，存在即第一次请求，执行业务完成后将 token 从 redis 中删除；
-4. 如果 token 不存在 redis 中，表示是重复操作，直接返回重复标记给 client，保证了业务代码不被重复执行。
+3. 服务器判断 token 是否存在 redis 中，**存在即第一次请求，执行业务完成后将 token 从 redis 中删除**；
+4. 如果 **token 不存在 redis 中，表示是重复操作**，直接返回重复标记给 client，保证了业务代码不被重复执行。
 
 <img src="./assets/3dadda95ba304ec480acf481a21d3ba7.png" alt="在这里插入图片描述" style="zoom: 80%;" />
 
@@ -1398,9 +1750,9 @@ RocketMQ 技术架构中有四大角色 NameServer、Broker、Producer 和 Consu
 
   > 如果**业务逻辑比较耗时**或者其他原因，有可能出现第一次访问时token存在，开始执行具体业务操作。但**在还没有删除token时，客户端又携带token发起同样的请求**，此时，因为token还存在，第二次请求也会验证通过，执行具体业务操作。这样就没有保证幂等性。
   >
-  > 解决办法：先删除token再执行业务直接执行redis的del()方法，成功说明当前线程占有资源，可以执行业务逻辑，后面的请求进来，调用del()方法失败，则将其放行即可。从而达到幂等目的。
+  > 解决办法：先删除token再执行业务。直接执行redis的del()方法，成功说明当前线程占有资源，可以执行业务逻辑，后面的请求进来，调用del()方法失败，则将其放行即可。从而达到幂等目的。
 
-- 问题二：先删除token再执行业务
+- 问题二：**先删除token再执行业务**
 
 > 这种方案也会存在一个问题，假设**具体业务代码执行超时或失败，没有向客户端返回明确结果**，那客户端就很有可能会进行**重试**，但此时之前的token已经被删除了，则会**被认为是重复请求**，不再进行业务处理。
 >
@@ -1408,9 +1760,9 @@ RocketMQ 技术架构中有四大角色 NameServer、Broker、Producer 和 Consu
 
 
 
-## 18. 链路追踪
+## 3. 链路追踪（jaeger）
 
-### 18.1 openTracing
+### 3.1 openTracing 标准
 
 - **Trace 和 sapn**
 
