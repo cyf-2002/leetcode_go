@@ -1133,7 +1133,7 @@ func (o *OrderListener) CheckLocalTransaction(msg *primitive.MessageExt) primiti
 }
 ```
 
-订单微服务监听订单超时消息
+订单微服务监听订单超时消息，如果订单状态异常，则发送消息到 order-reback
 
 ```go
     // 监听超时支付消息topic
@@ -1142,6 +1142,10 @@ func (o *OrderListener) CheckLocalTransaction(msg *primitive.MessageExt) primiti
 
     // 订阅消息
     err = c.Subscribe(global.ServerConfig.MqInfo.Topic, consumer.MessageSelector{}, handler.TimeOutReback)
+
+	if order.Status != "TRADE_SUCCESS" {
+		//归还库存，模仿order发送消息到order-reback中
+    }
 ```
 
 
@@ -1368,9 +1372,9 @@ RockerMQ 中的消费群组和 Queue，可以类比 Kafka 中的消费群组和 
 
 RocketMQ 技术架构中有四大角色 NameServer、Broker、Producer 和 Consumer，下面主要介绍 Broker。
 
-**Broker 用于存放 Queue，一个 Broker 可以配置多个 Topic，一个 Topic 中存在多个 Queue。**
+- Broker 内部维护着一个个 Consumer Queue，用来存储消息的索引，真正存储消息的地方是 **CommitLog**（日志文件）
 
-如果某个 Topic 消息量很大，应该给它多配置几个 Queue，并且尽量多分布在不同 broker 上，以减轻某个 broker 的压力。Topic 消息量都比较均匀的情况下，如果某个 broker 上的队列越多，则该 broker 压力越大。
+- 单个 Broker 与所有的 Nameserver 保持着**长连接和心跳**，并会定时将 Topic 信息同步到 NameServer，和 NameServer 的通信底层是通过 Netty 实现的。
 
 <img src="./assets/15fc490a03c240a692fa44aeb0bc6f2a.png" alt="img" style="zoom: 50%;" />
 
@@ -1402,7 +1406,7 @@ RocketMQ 选择了确保一定投递，**保证消息不丢失**，但有可能�
 
 - 在生产阶段，主要**通过请求确认机制，来保证消息的可靠传递**。相应失败应该重试
 - 存储阶段，可以通过**配置可靠性优先的 Broker 参数来避免因为宕机丢消息**。
-  - 消息持久化到 CommitLog
+  - 消息持久化到 CommitLog（日志文件）
   - 同步刷盘； Producer 发送消息后等数据持久化到磁盘之后再返回响应给 Producer
   - Broker 支持 Master 和 Slave 同步复制、Master 和 Slave 异步复制模式
 - 消费阶段，在**执行完所有消费业务逻辑**之后，再发送消费确认。
